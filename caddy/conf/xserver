@@ -1,105 +1,24 @@
-# table ip nat {
-#     chain xproxy {
-#         type nat hook prerouting priority dstnat; policy accept;
-#         meta l4proto { tcp, udp } th dport 3306-3399 dnat to :2443
-#     }
-# }
 servers :2443 {
     protocols h1 h2
 }
 
 caddyx {
-    tls_server_name {$CADDYX_DOMAIN:example.com} 
+    tls_server_name {$CADDYX_DOMAIN:example.com}
 
-    # TUIC v5 proxy server configuration.
     tuic {
-        # UDP address to listen on. TUIC shares this port with H3.
         listen :2443
-
-        # Authorized users: <uuid> <password>
         users {
-            {$TUIC_UUID:FED9B1D2-650F-4024-8FE5-D9D4D432F72F} {$TUIC_PASSWORD:o8EMT2lx14nObRzr}
+            {$TUIC_UUID:FED9B1D2-650F-4024-8FE5-D9D4D432F72F} {$TUIC_PASSWORD:thisisunsafe}
         }
 
-        # Congestion control algorithm: bbr | bbr_meta_v1 | cubic | new_reno
-        # bbr_meta_v1 is the only variant that supports the advanced bbr_*
-        # tuning fields below; switch to bbr (meta2) if you want default
-        # sing-quic behavior.
         congestion_control bbr_meta_v1
-
-        # How long to wait for client authentication before falling back to H3.
         auth_timeout 3s
-
-        # QUIC keep-alive PING interval. The server emits a PING frame
-        # at this cadence, keeping the connection alive at the QUIC
-        # transport layer. MaxIdleTimeout is set to 3x this value.
         keepalive_period 10s
-
-        # Maximum UDP relay packet size before fragmentation.
         max_udp_relay_packet_size 1350
-
-        # BBR / QUIC tuning.
-        #
-        # These two fields are the validated optimization for clean high-BDP
-        # links (CN2 GIA, ~150ms RTT, no packet loss). Production testing
-        # showed buffer health improving from 3-5s to ~20s on YouTube 4K
-        # with these alone — they affect transfer *startup state* without
-        # touching BBR's control loop, so they are pure wins.
-        #
-        # bbr_initial_cwnd works for both bbr and bbr_meta_v1.
-        # initial_packet_size is QUIC-level and applies to every algorithm.
-        #
-        # Three reference profiles (initial_cwnd / packet_size):
-        #   Profile A — conservative    128 / 1350
-        #   Profile B — moderate    ⭐   512 / 1350   (current)
-        #   Profile C — aggressive     2048 / 1350
-        #
-        # Defaults if omitted: 32 / 1280
-        # Valid ranges: [32, 8192] / [1200, 1452]
-        bbr_initial_cwnd    512
+        bbr_initial_cwnd 512
         initial_packet_size 1350
-
-        # The four fields below are advanced BBR control-loop tuning:
-        # they override package vars in sing-quic congestion_meta1 and only
-        # take effect with congestion_control bbr_meta_v1. Production testing
-        # on CN2 GIA found NO positive effect from these — sing-quic defaults
-        # are already well-tuned for stable international links and pushing
-        # them harder triggers BBR edge cases (overshoot, queue buildup,
-        # stale RTT). Leave commented unless you are testing on a different
-        # link profile and have a specific reason to deviate. See ADR-008.
-        #
-        # bbr_high_gain        3.5    # default 2.77
-        # bbr_pacing_gain      1.5    # default 1.25
-        # bbr_min_rtt_expiry   60s    # default 10s
-        # bbr_bandwidth_window 16     # default 10
     }
 
-    # Optional embedded Trojan-over-TLS server.
-    #
-    # The trojan server is built into caddyx specifically because
-    # imgk/caddy-trojan's listener_wrapper architecture breaks Caddy's
-    # normal TLS pipeline (it cannot inherit ALPN from the matched
-    # TLSConnectionPolicy, so probes hitting the listener with default
-    # h2/http/1.1 ALPN get a `no_application_protocol` alert and never
-    # see the camouflage page). caddyx's trojan does its own TLS
-    # termination using the same *tls.Config TUIC uses, then peeks the
-    # first 58 bytes of the decrypted stream:
-    #
-    #   - first 4 bytes all hex     → maybe trojan, read remaining 54
-    #   - hash matches a password   → relay TCP to target
-    #   - any other case            → rewind onto a virtual TCP listener
-    #                                 and serve via Caddy's HTTP handler
-    #
-    # Result: ALPN works correctly because we use Caddy's tls.Config
-    # verbatim; fallback works because we route through Caddy's normal
-    # HTTP handler chain.
-    #
-    # IMPORTANT: trojan listens on the configured `listen` address as
-    # TCP. If you do NOT set `listen` here, it reuses the TUIC listen
-    # port (TCP version). On Caddy's :443, this conflicts with Caddy's
-    # own HTTPS TCP listener — pick a different port (e.g. :8443) or
-    # move Caddy's HTTPS to a different port.
-    #
     trojan {
         listen :2443
         passwords {
@@ -107,126 +26,31 @@ caddyx {
         }
     }
 
-    # Cloudflare WARP outbound. Routes ALL relay egress (tuic/trojan/
-    # kuic) through a userspace wireguard-go + netstack tunnel against
-    # Cloudflare's WARP network. Free tier works anonymously; WARP+
-    # users can set `license_key` to bind a subscribed IP pool.
-    #
-    # Presence of this block enables WARP globally — you cannot scope
-    # it to individual relays. An anonymous Cloudflare identity is
-    # auto-registered and persisted via certmagic.Storage on first run;
-    # at startup, caddyx scans Cloudflare's /24 + /48 ranges for the
-    # lowest-RTT endpoint. See ADR-019 for design, warp/ for internals.
-    #
+    kuic {
+        listen :2443
+        passwords {
+            {$KUIC_PASSWORD:thisisunsafe}
+        }
+
+        padding initial
+        keepalive_period 10s
+        initial_packet_size 1280
+        auth_timeout 5s
+        udp_session_timeout 60s
+        max_idle_timeout 30s
+    }
+
     warp {
-      # WARP+ license key (optional). When absent, runs anonymous
-      # free-tier. When present, bound to the provisioned identity.
-      # license_key XXXXXXXX-XXXXXXXX-XXXXXXXX
-    
-      # Preferred-IP scan configuration. All scan-related knobs
-      # live in this nested block. When the outer `endpoint` is
-      # set below, this whole block is ignored (scan path skipped).
-      prefer_ip_scan {
-          # Cloudflare WARP egress prefixes to scan. Default
-          # is 162.159.192.0/24 only — CF's most stable
-          # anycast primary, biased small to keep first-boot
-          # scan footprint below CF anti-abuse thresholds on
-          # low-reputation source networks (cheap VPS).
-          # Each prefix's family is detected from its address
-          # (no separate ipv4/ipv6 toggle). IPv4 entries must
-          # be /24, IPv6 entries must be /48.
-          #
-          # Full set if you want broad coverage:
-          #   scan_prefixes 162.159.192.0/24 162.159.195.0/24 \
-          #                 188.114.96.0/24 188.114.97.0/24 \
-          #                 188.114.98.0/24 188.114.99.0/24 \
-          #                 2606:4700:d0::/48 2606:4700:d1::/48
-          scan_prefixes 162.159.192.0/24
-    
-          # Concurrent UDP probes during endpoint scan.
-          # Default 50. Raise on low-CPU hosts stuck in Phase
-          # A; lower on restricted networks where parallel
-          # probes get rate-limited.
-          concurrency 50
-    
-          # Reject scan results whose UDP probe RTT exceeds
-          # this bound. Default 400ms.
-          max_rtt 400ms
-    
-          # Periodic rescan cadence. Default 24h. Set 0s or
-          # a negative value to disable the timer entirely
-          # (scan still runs at startup and whenever the
-          # liveness recovery ladder triggers).
-          interval 24h
-    
-          # Per-phase budgets for the scan/probe pipeline.
-          # scan_timeout caps the handshake scan that walks
-          # /24 + /48 ranges and produces a sorted candidate
-          # pool; probe_timeout is the wall-clock budget for
-          # the data-plane probe phase that iterates the pool
-          # (best-RTT first) and stops early once 5 survivors
-          # are found. Both must be >= 5s. Server.Provision's
-          # overall wall-clock is derived from these plus
-          # internal phase windows, no separate provision_timeout.
-          scan_timeout 30s
-          probe_timeout 180s
-    
-          # Per-candidate budget inside the probe phase. Each
-          # scanned IP gets this much time to return a valid
-          # DNS answer through the WG tunnel before being treated
-          # as failed. Default 2s — CF anycast handshake typically
-          # completes within 200-400ms, then a DNS query to
-          # 8.8.8.8/9.9.9.9 needs another full round-trip out
-          # through the WARP exit, so 2s leaves comfortable slack
-          # for high-RTT or jittery paths. Must be >= 100ms and
-          # at most probe_timeout / 2 (otherwise probe budget
-          # allows fewer than 2 candidates). Lower this only if
-          # you have measured RTT and want faster startup.
-          probe_per_target 2s
-    
-          # Recently-failed candidates (data-plane probe failed)
-          # get banned from rescan for this duration. Cache file
-          # warp/failed_endpoints.json persists across restarts so
-          # probing the same dead Cloudflare anycast IPs doesn't
-          # burn 30-120s on every boot. Default 24h, must be
-          # >= 1m. Delete the cache file to force a clean retry
-          # on all addresses.
-          failed_ban_window 24h
-      }
-    
-      # Manually pin endpoint "ip:port" or "host:port". When set,
-      # prefer_ip_scan is skipped entirely. Use when you already
-      # know a good endpoint close to your server.
-      # endpoint 162.159.192.1:2408
-    
-      # TUN interface MTU. Default 1280 (conservative for dual-stack
-      # + WG overhead). Raise to 1420 on a clean native IPv4 link
-      # for ~10% throughput win.
-      mtu 1280
-    
-      # SELF-HEALING DIRECT-CONNECT FALLBACK (advanced, opt-in).
-      # Presence of this block authorizes caddyx to bypass WARP
-      # (route relay traffic through the host's stdlib net.Dialer
-      # using the server's real IP) when the 5-step recovery
-      # ladder in warp/net/liveness.go exhausts — i.e. cached
-      # endpoints, fresh rescan, domain fallback IP, and full
-      # Tunnel.Rebuild ALL failed to restore the data plane. Once
-      # in DEGRADED mode, a retry goroutine reruns scanAndProbe
-      # every retry_interval; first non-empty result flips back
-      # to ACTIVE. See ADR-022 for the state machine.
-      #
-      # TRADE-OFF: enabling this sacrifices WARP's IP-anonymity
-      # guarantee in extreme failure scenarios. Default (no
-      # block) preserves anonymity — clients see timeouts until
-      # WARP recovers or the operator intervenes. Enable only if
-      # availability trumps anonymity for your threat model.
-      #
-      # fallback {
-      #   # Interval between DEGRADED-mode rejoin attempts.
-      #   # Default 1h. Minimum 1m (validated at Provision).
-      #   # Shorter = faster recovery, more scan traffic
-      #   # during outages.
-      #   retry_interval 1h
-      # }
+        prefer_ip_scan {
+            scan_prefixes 162.159.192.0/24
+            concurrency 50
+            max_rtt 400ms
+            scan_timeout 30s
+            probe_timeout 180s
+            probe_per_target 2s
+            failed_ban_window 24h
+        }
+
+        mtu 1280
     }
 }
