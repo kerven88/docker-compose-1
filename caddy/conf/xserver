@@ -2,6 +2,10 @@ servers :2443 {
     protocols h1 h2
 }
 
+servers :6443 {
+    protocols h1 h2
+}
+
 caddyx {
     tls_server_name {$CADDYX_DOMAIN:example.com}
 
@@ -27,7 +31,7 @@ caddyx {
     }
 
     kuic {
-        listen :2443
+        listen :6443
         passwords {
             {$KUIC_PASSWORD:thisisunsafe}
         }
