@@ -36,6 +36,7 @@ caddyx {
             {$KUIC_PASSWORD:thisisunsafe}
         }
 
+        server_bandwidth 1gbps
         padding initial
         keepalive_period 10s
         initial_packet_size 1280
