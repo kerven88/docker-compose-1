@@ -30,18 +30,32 @@ caddyx {
         }
     }
 
+    hysteria2 {
+        listen :3443
+        auth {
+            password {$HYSTERIA2_PASSWORD:thisisunsafe}
+        }
+        download 1gbps
+        upload_limit 100mbps
+        keepalive_period 10s
+        udp_idle_timeout 60s
+        max_idle_timeout 30s
+        initial_packet_size 1350
+    }
+
     kuic {
         listen :6443
         passwords {
             {$KUIC_PASSWORD:thisisunsafe}
         }
 
-        server_bandwidth 1gbps
+        download 1gbps
+        upload_limit 100mbps
         padding initial
-        keepalive_period 10s
         initial_packet_size 1280
         auth_timeout 5s
-        udp_session_timeout 60s
+        keepalive_period 10s
+        udp_idle_timeout 60s
         max_idle_timeout 30s
     }
 
