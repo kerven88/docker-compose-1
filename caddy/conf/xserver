@@ -1,11 +1,3 @@
-servers :2443 {
-    protocols h1 h2
-}
-
-servers :6443 {
-    protocols h1 h2
-}
-
 caddyx {
     tls_server_name {$CADDYX_DOMAIN:example.com}
 
@@ -41,6 +33,18 @@ caddyx {
         udp_idle_timeout 60s
         max_idle_timeout 30s
         initial_packet_size 1350
+    }
+
+    anytls {
+        listen :3443
+
+        password {$ANYTLS_PASSWORD:thisisunsafe}
+
+        brutal {
+            enabled true
+            download 1gbps
+            cwnd_gain 15
+        }
     }
 
     kuic {
