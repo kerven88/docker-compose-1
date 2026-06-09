@@ -27,7 +27,7 @@ caddyx {
         auth {
             password {$HYSTERIA2_PASSWORD:thisisunsafe}
         }
-        download 200mbps
+        download 300mbps
         upload_limit 100mbps
         keepalive_period 10s
         udp_idle_timeout 60s
@@ -53,7 +53,7 @@ caddyx {
             {$KUIC_PASSWORD:thisisunsafe}
         }
 
-        download 200mbps
+        download 300mbps
         upload_limit 100mbps
         padding initial
         initial_packet_size 1280
